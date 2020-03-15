@@ -146,7 +146,7 @@ exports.handler = (event, context, callback) => {
           .then(() => {
             callback(null, {
               statusCode: 200,
-              body: "Success!",
+              body: JSON.stringify(geojson, null, 2),
             })
           })
           .catch(error => {
