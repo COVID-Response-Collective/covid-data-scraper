@@ -12,8 +12,6 @@ const parseCsv = require("../utils/parseCsv")
 const getSupplement = require("../utils/getSupplement")
 const mergeData = require("../utils/mergeData")
 const prepareScrapedData = require("../utils/prepareScrapedData")
-const deleteAllFeatures = require("../utils/deleteAllFeatures")
-const uploadToDataHub = require("../utils/uploadToDataHub")
 const credentials = require("../utils/credentials")
 
 const { secret } = credentials
@@ -119,44 +117,10 @@ exports.handler = (event, context, callback) => {
 
     const mergedData = mergeData(dateHeaders, jhuData, dxyData)
 
-    const geojson = {
-      type: "FeatureCollection",
-      features: mergedData.map(properties => {
-
-        const keys = Object.keys(properties)
-        const newProps = keys.reduce((acc, cur) => {
-          acc[cur.toLowerCase()] = properties[cur]
-          return acc
-        }, {})
-
-        return {
-          type: "Feature",
-          geometry: {
-            type: "Point",
-            coordinates: [parseFloat(properties.long), parseFloat(properties.lat)],
-          },
-          properties: newProps,
-        }
-      }),
-    }
-
-    deleteAllFeatures()
-      .then(() => {
-        uploadToDataHub(geojson)
-          .then(() => {
-            callback(null, {
-              statusCode: 200,
-              body: JSON.stringify(geojson, null, 2),
-            })
-          })
-          .catch(error => {
-            callback(null, {
-              statusCode: 422,
-              body: String(error),
-            })
-          })
-      })
-
+    callback(null, {
+      statusCode: 200,
+      body: JSON.stringify(mergedData, null, 2),
+    })
   })
 
 }

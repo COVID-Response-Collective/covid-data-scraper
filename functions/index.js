@@ -34,7 +34,7 @@ module.exports =
 /******/ 	// the startup function
 /******/ 	function startup() {
 /******/ 		// Load entry module and return exports
-/******/ 		return __webpack_require__(171);
+/******/ 		return __webpack_require__(227);
 /******/ 	};
 /******/
 /******/ 	// run startup
@@ -43,7 +43,7 @@ module.exports =
 /************************************************************************/
 /******/ ({
 
-/***/ 53:
+/***/ 120:
 /***/ (function(module, __unusedexports, __webpack_require__) {
 
 /*
@@ -52,7 +52,227 @@ module.exports =
  * SPDX-License-Identifier: MIT
  */
 
-const dayjs = __webpack_require__(808)
+const dsv = __webpack_require__(586)
+
+function parseCsv(data) {
+  const substitutes = {
+    "2": "\"first_recorded\"",
+    "3": "\"lat\"",
+    "4": "\"long\"",
+  }
+
+  const rows = data.split("\n")
+  const headers = rows[0].split(",").map((d, i) => {
+    return substitutes[i] ? substitutes[i] : d
+  }).join(",")
+  const raw = headers + "\n" + rows.slice(1).join("\n")
+  const parsed = dsv.csvParse(raw)
+
+  return parsed
+}
+
+module.exports = parseCsv
+
+
+/***/ }),
+
+/***/ 181:
+/***/ (function(module) {
+
+/*
+ * Copyright (C) 2020 HERE Europe B.V.
+ * Licensed under MIT, see full license in LICENSE
+ * SPDX-License-Identifier: MIT
+ */
+
+function getSupplement(prefix = "", referenceSheet, sheet, dateHeaders) {
+  const relevant = sheet
+    ? sheet.find(s => (s["Province/State"] === referenceSheet["Province/State"]) && (s["Country/Region"] === referenceSheet["Country/Region"]))
+    : referenceSheet
+  return dateHeaders.reduce((acc, cur) => {
+    if (!relevant[cur]) return acc
+    acc[prefix + cur] = parseInt(relevant[cur])
+    return acc
+  }, {})
+}
+
+module.exports = getSupplement
+
+
+/***/ }),
+
+/***/ 211:
+/***/ (function(module) {
+
+module.exports = require("https");
+
+/***/ }),
+
+/***/ 227:
+/***/ (function(__unusedmodule, exports, __webpack_require__) {
+
+/*
+ * Copyright (C) 2020 HERE Europe B.V.
+ * Licensed under MIT, see full license in LICENSE
+ * SPDX-License-Identifier: MIT
+ */
+
+
+const fetch = __webpack_require__(977)
+const dayjs = __webpack_require__(352)
+
+const parseCsv = __webpack_require__(120)
+const getSupplement = __webpack_require__(181)
+const mergeData = __webpack_require__(284)
+const prepareScrapedData = __webpack_require__(846)
+const credentials = __webpack_require__(271)
+
+const { secret } = credentials
+
+exports.handler = (event, context, callback) => {
+  const apiKey = event.queryStringParameters.apiKey
+  if (apiKey !== secret) {
+    callback(null, {
+      statusCode: 403,
+      body: `You don't have access!`,
+    })
+    return
+  }
+
+  const sheets = ["Confirmed", "Recovered", "Deaths"]
+
+  const sheetQueries = sheets.map(sheetName => {
+    return fetch (`https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-${sheetName}.csv`).then(d => d.text())
+  })
+
+  Promise.all([
+    ...sheetQueries,
+    fetch("https://ncov.dxy.cn/ncovh5/view/pneumonia").then(d => d.text()),
+  ]).then(values => {
+
+    const [confirmedRaw, recoveredRaw, deathRaw] = values.slice(0, 3).map(d => parseCsv(d))
+    const dxyData = prepareScrapedData(values[3])
+
+    const [dateHeadersRaw, otherHeaders] = confirmedRaw.columns.reduce((acc, cur, i) => {
+      if (!i) acc = [[],[]]
+      const d = dayjs(cur).format("M/D/YYYY h:mm a")
+      if (d === "Invalid Date") acc[1].push(cur)
+      else acc[0].push(cur)
+      return acc
+    }, [])
+
+    const dateHeaders = dateHeadersRaw.map(d => dayjs(d).format("M/D/YYYY h:mm a"))
+
+    const confirmed = confirmedRaw.map(d => {
+      return Object.keys(d).reduce((acc, cur) => {
+        const isOtherHeader = otherHeaders.includes(cur)
+        const asDate = dayjs(cur).format("M/D/YYYY h:mm a")
+        const isDate = asDate !== "Invalid Date"
+        if (isDate && dateHeaders.includes(asDate)) {
+          acc[asDate] = parseInt(d[cur])
+        } else if(isOtherHeader) {
+          acc[cur] = d[cur]
+        } else {
+          return acc
+        }
+        return acc
+      }, {})
+    })
+
+    const recovered = recoveredRaw.map(d => {
+      return Object.keys(d).reduce((acc, cur) => {
+        const isOtherHeader = otherHeaders.includes(cur)
+        const asDate = dayjs(cur).format("M/D/YYYY h:mm a")
+        const isDate = asDate !== "Invalid Date"
+        if (isDate && dateHeaders.includes(asDate)) {
+          acc[asDate] = parseInt(d[cur])
+        } else if(isOtherHeader) {
+          acc[cur] = d[cur]
+        } else {
+          return acc
+        }
+        return acc
+      }, {})
+    })
+
+    const death = deathRaw.map(d => {
+      return Object.keys(d).reduce((acc, cur) => {
+        const isOtherHeader = otherHeaders.includes(cur)
+        const asDate = dayjs(cur).format("M/D/YYYY h:mm a")
+        const isDate = asDate !== "Invalid Date"
+        if (isDate && dateHeaders.includes(asDate)) {
+          acc[asDate] = parseInt(d[cur])
+        } else if(isOtherHeader) {
+          acc[cur] = d[cur]
+        } else {
+          return acc
+        }
+        return acc
+      }, {})
+    })
+
+    const jhuData = confirmed.map(d => {
+      const supplementConfirmed = getSupplement("", d, null, dateHeaders)
+      const supplementRecovered = getSupplement("recoveries_", d, recovered, dateHeaders)
+      const supplementDeath = getSupplement("deaths_", d, death, dateHeaders)
+      return {
+        provincestate: d["Province/State"],
+        countryregion: d["Country/Region"],
+        // Fix column mismatch in the dataset
+        lat: d["first_recorded"],
+        long: d["lat"],
+        headers: dateHeaders.join(";;"),
+        ...supplementConfirmed,
+        ...supplementRecovered,
+        ...supplementDeath,
+      }
+    })
+
+    const mergedData = mergeData(dateHeaders, jhuData, dxyData)
+
+    callback(null, {
+      statusCode: 200,
+      body: JSON.stringify(mergedData, null, 2),
+    })
+  })
+
+}
+
+
+/***/ }),
+
+/***/ 271:
+/***/ (function(module) {
+
+/*
+ * Copyright (C) 2020 HERE Europe B.V.
+ * Licensed under MIT, see full license in LICENSE
+ * SPDX-License-Identifier: MIT
+ */
+
+const spaceId = "INSERT_HERE_STUDIO_SPACE_ID"
+const accessToken = "INSERT_HERE_ACCESS_TOKEN"
+const secret = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+
+module.exports = {
+  spaceId,
+  accessToken,
+  secret,
+}
+
+
+/***/ }),
+
+/***/ 284:
+/***/ (function(module, __unusedexports, __webpack_require__) {
+
+/*
+ * Copyright (C) 2020 HERE Europe B.V.
+ * Licensed under MIT, see full license in LICENSE
+ * SPDX-License-Identifier: MIT
+ */
+
+const dayjs = __webpack_require__(352)
 
 function mergeData(dateHeaders, jhuData, dxyDate) {
   const latestJHUDate = dayjs(dateHeaders[dateHeaders.length - 1]).format("M/D/YYYY")
@@ -95,7 +315,358 @@ module.exports = mergeData
 
 /***/ }),
 
-/***/ 130:
+/***/ 352:
+/***/ (function(module) {
+
+!function(t,n){ true?module.exports=n():undefined}(this,function(){"use strict";var t="millisecond",n="second",e="minute",r="hour",i="day",s="week",u="month",o="quarter",a="year",h=/^(\d{4})-?(\d{1,2})-?(\d{0,2})[^0-9]*(\d{1,2})?:?(\d{1,2})?:?(\d{1,2})?.?(\d{1,3})?$/,f=/\[([^\]]+)]|Y{2,4}|M{1,4}|D{1,2}|d{1,4}|H{1,2}|h{1,2}|a|A|m{1,2}|s{1,2}|Z{1,2}|SSS/g,c=function(t,n,e){var r=String(t);return!r||r.length>=n?t:""+Array(n+1-r.length).join(e)+t},d={s:c,z:function(t){var n=-t.utcOffset(),e=Math.abs(n),r=Math.floor(e/60),i=e%60;return(n<=0?"+":"-")+c(r,2,"0")+":"+c(i,2,"0")},m:function(t,n){var e=12*(n.year()-t.year())+(n.month()-t.month()),r=t.clone().add(e,u),i=n-r<0,s=t.clone().add(e+(i?-1:1),u);return Number(-(e+(n-r)/(i?r-s:s-r))||0)},a:function(t){return t<0?Math.ceil(t)||0:Math.floor(t)},p:function(h){return{M:u,y:a,w:s,d:i,D:"date",h:r,m:e,s:n,ms:t,Q:o}[h]||String(h||"").toLowerCase().replace(/s$/,"")},u:function(t){return void 0===t}},$={name:"en",weekdays:"Sunday_Monday_Tuesday_Wednesday_Thursday_Friday_Saturday".split("_"),months:"January_February_March_April_May_June_July_August_September_October_November_December".split("_")},l="en",m={};m[l]=$;var y=function(t){return t instanceof v},M=function(t,n,e){var r;if(!t)return l;if("string"==typeof t)m[t]&&(r=t),n&&(m[t]=n,r=t);else{var i=t.name;m[i]=t,r=i}return!e&&r&&(l=r),r||!e&&l},g=function(t,n,e){if(y(t))return t.clone();var r=n?"string"==typeof n?{format:n,pl:e}:n:{};return r.date=t,new v(r)},D=d;D.l=M,D.i=y,D.w=function(t,n){return g(t,{locale:n.$L,utc:n.$u,$offset:n.$offset})};var v=function(){function c(t){this.$L=this.$L||M(t.locale,null,!0),this.parse(t)}var d=c.prototype;return d.parse=function(t){this.$d=function(t){var n=t.date,e=t.utc;if(null===n)return new Date(NaN);if(D.u(n))return new Date;if(n instanceof Date)return new Date(n);if("string"==typeof n&&!/Z$/i.test(n)){var r=n.match(h);if(r)return e?new Date(Date.UTC(r[1],r[2]-1,r[3]||1,r[4]||0,r[5]||0,r[6]||0,r[7]||0)):new Date(r[1],r[2]-1,r[3]||1,r[4]||0,r[5]||0,r[6]||0,r[7]||0)}return new Date(n)}(t),this.init()},d.init=function(){var t=this.$d;this.$y=t.getFullYear(),this.$M=t.getMonth(),this.$D=t.getDate(),this.$W=t.getDay(),this.$H=t.getHours(),this.$m=t.getMinutes(),this.$s=t.getSeconds(),this.$ms=t.getMilliseconds()},d.$utils=function(){return D},d.isValid=function(){return!("Invalid Date"===this.$d.toString())},d.isSame=function(t,n){var e=g(t);return this.startOf(n)<=e&&e<=this.endOf(n)},d.isAfter=function(t,n){return g(t)<this.startOf(n)},d.isBefore=function(t,n){return this.endOf(n)<g(t)},d.$g=function(t,n,e){return D.u(t)?this[n]:this.set(e,t)},d.year=function(t){return this.$g(t,"$y",a)},d.month=function(t){return this.$g(t,"$M",u)},d.day=function(t){return this.$g(t,"$W",i)},d.date=function(t){return this.$g(t,"$D","date")},d.hour=function(t){return this.$g(t,"$H",r)},d.minute=function(t){return this.$g(t,"$m",e)},d.second=function(t){return this.$g(t,"$s",n)},d.millisecond=function(n){return this.$g(n,"$ms",t)},d.unix=function(){return Math.floor(this.valueOf()/1e3)},d.valueOf=function(){return this.$d.getTime()},d.startOf=function(t,o){var h=this,f=!!D.u(o)||o,c=D.p(t),d=function(t,n){var e=D.w(h.$u?Date.UTC(h.$y,n,t):new Date(h.$y,n,t),h);return f?e:e.endOf(i)},$=function(t,n){return D.w(h.toDate()[t].apply(h.toDate(),(f?[0,0,0,0]:[23,59,59,999]).slice(n)),h)},l=this.$W,m=this.$M,y=this.$D,M="set"+(this.$u?"UTC":"");switch(c){case a:return f?d(1,0):d(31,11);case u:return f?d(1,m):d(0,m+1);case s:var g=this.$locale().weekStart||0,v=(l<g?l+7:l)-g;return d(f?y-v:y+(6-v),m);case i:case"date":return $(M+"Hours",0);case r:return $(M+"Minutes",1);case e:return $(M+"Seconds",2);case n:return $(M+"Milliseconds",3);default:return this.clone()}},d.endOf=function(t){return this.startOf(t,!1)},d.$set=function(s,o){var h,f=D.p(s),c="set"+(this.$u?"UTC":""),d=(h={},h[i]=c+"Date",h.date=c+"Date",h[u]=c+"Month",h[a]=c+"FullYear",h[r]=c+"Hours",h[e]=c+"Minutes",h[n]=c+"Seconds",h[t]=c+"Milliseconds",h)[f],$=f===i?this.$D+(o-this.$W):o;if(f===u||f===a){var l=this.clone().set("date",1);l.$d[d]($),l.init(),this.$d=l.set("date",Math.min(this.$D,l.daysInMonth())).toDate()}else d&&this.$d[d]($);return this.init(),this},d.set=function(t,n){return this.clone().$set(t,n)},d.get=function(t){return this[D.p(t)]()},d.add=function(t,o){var h,f=this;t=Number(t);var c=D.p(o),d=function(n){var e=g(f);return D.w(e.date(e.date()+Math.round(n*t)),f)};if(c===u)return this.set(u,this.$M+t);if(c===a)return this.set(a,this.$y+t);if(c===i)return d(1);if(c===s)return d(7);var $=(h={},h[e]=6e4,h[r]=36e5,h[n]=1e3,h)[c]||1,l=this.$d.getTime()+t*$;return D.w(l,this)},d.subtract=function(t,n){return this.add(-1*t,n)},d.format=function(t){var n=this;if(!this.isValid())return"Invalid Date";var e=t||"YYYY-MM-DDTHH:mm:ssZ",r=D.z(this),i=this.$locale(),s=this.$H,u=this.$m,o=this.$M,a=i.weekdays,h=i.months,c=function(t,r,i,s){return t&&(t[r]||t(n,e))||i[r].substr(0,s)},d=function(t){return D.s(s%12||12,t,"0")},$=i.meridiem||function(t,n,e){var r=t<12?"AM":"PM";return e?r.toLowerCase():r},l={YY:String(this.$y).slice(-2),YYYY:this.$y,M:o+1,MM:D.s(o+1,2,"0"),MMM:c(i.monthsShort,o,h,3),MMMM:h[o]||h(this,e),D:this.$D,DD:D.s(this.$D,2,"0"),d:String(this.$W),dd:c(i.weekdaysMin,this.$W,a,2),ddd:c(i.weekdaysShort,this.$W,a,3),dddd:a[this.$W],H:String(s),HH:D.s(s,2,"0"),h:d(1),hh:d(2),a:$(s,u,!0),A:$(s,u,!1),m:String(u),mm:D.s(u,2,"0"),s:String(this.$s),ss:D.s(this.$s,2,"0"),SSS:D.s(this.$ms,3,"0"),Z:r};return e.replace(f,function(t,n){return n||l[t]||r.replace(":","")})},d.utcOffset=function(){return 15*-Math.round(this.$d.getTimezoneOffset()/15)},d.diff=function(t,h,f){var c,d=D.p(h),$=g(t),l=6e4*($.utcOffset()-this.utcOffset()),m=this-$,y=D.m(this,$);return y=(c={},c[a]=y/12,c[u]=y,c[o]=y/3,c[s]=(m-l)/6048e5,c[i]=(m-l)/864e5,c[r]=m/36e5,c[e]=m/6e4,c[n]=m/1e3,c)[d]||m,f?y:D.a(y)},d.daysInMonth=function(){return this.endOf(u).$D},d.$locale=function(){return m[this.$L]},d.locale=function(t,n){if(!t)return this.$L;var e=this.clone(),r=M(t,n,!0);return r&&(e.$L=r),e},d.clone=function(){return D.w(this.$d,this)},d.toDate=function(){return new Date(this.valueOf())},d.toJSON=function(){return this.isValid()?this.toISOString():null},d.toISOString=function(){return this.$d.toISOString()},d.toString=function(){return this.$d.toUTCString()},c}();return g.prototype=v.prototype,g.extend=function(t,n){return t(n,v,g),g},g.locale=M,g.isDayjs=y,g.unix=function(t){return g(1e3*t)},g.en=m[l],g.Ls=m,g});
+
+
+/***/ }),
+
+/***/ 413:
+/***/ (function(module) {
+
+module.exports = require("stream");
+
+/***/ }),
+
+/***/ 426:
+/***/ (function() {
+
+eval("require")("encoding");
+
+
+/***/ }),
+
+/***/ 586:
+/***/ (function(__unusedmodule, exports) {
+
+// https://d3js.org/d3-dsv/ v1.2.0 Copyright 2019 Mike Bostock
+(function (global, factory) {
+ true ? factory(exports) :
+undefined;
+}(this, function (exports) { 'use strict';
+
+var EOL = {},
+    EOF = {},
+    QUOTE = 34,
+    NEWLINE = 10,
+    RETURN = 13;
+
+function objectConverter(columns) {
+  return new Function("d", "return {" + columns.map(function(name, i) {
+    return JSON.stringify(name) + ": d[" + i + "] || \"\"";
+  }).join(",") + "}");
+}
+
+function customConverter(columns, f) {
+  var object = objectConverter(columns);
+  return function(row, i) {
+    return f(object(row), i, columns);
+  };
+}
+
+// Compute unique columns in order of discovery.
+function inferColumns(rows) {
+  var columnSet = Object.create(null),
+      columns = [];
+
+  rows.forEach(function(row) {
+    for (var column in row) {
+      if (!(column in columnSet)) {
+        columns.push(columnSet[column] = column);
+      }
+    }
+  });
+
+  return columns;
+}
+
+function pad(value, width) {
+  var s = value + "", length = s.length;
+  return length < width ? new Array(width - length + 1).join(0) + s : s;
+}
+
+function formatYear(year) {
+  return year < 0 ? "-" + pad(-year, 6)
+    : year > 9999 ? "+" + pad(year, 6)
+    : pad(year, 4);
+}
+
+function formatDate(date) {
+  var hours = date.getUTCHours(),
+      minutes = date.getUTCMinutes(),
+      seconds = date.getUTCSeconds(),
+      milliseconds = date.getUTCMilliseconds();
+  return isNaN(date) ? "Invalid Date"
+      : formatYear(date.getUTCFullYear()) + "-" + pad(date.getUTCMonth() + 1, 2) + "-" + pad(date.getUTCDate(), 2)
+      + (milliseconds ? "T" + pad(hours, 2) + ":" + pad(minutes, 2) + ":" + pad(seconds, 2) + "." + pad(milliseconds, 3) + "Z"
+      : seconds ? "T" + pad(hours, 2) + ":" + pad(minutes, 2) + ":" + pad(seconds, 2) + "Z"
+      : minutes || hours ? "T" + pad(hours, 2) + ":" + pad(minutes, 2) + "Z"
+      : "");
+}
+
+function dsv(delimiter) {
+  var reFormat = new RegExp("[\"" + delimiter + "\n\r]"),
+      DELIMITER = delimiter.charCodeAt(0);
+
+  function parse(text, f) {
+    var convert, columns, rows = parseRows(text, function(row, i) {
+      if (convert) return convert(row, i - 1);
+      columns = row, convert = f ? customConverter(row, f) : objectConverter(row);
+    });
+    rows.columns = columns || [];
+    return rows;
+  }
+
+  function parseRows(text, f) {
+    var rows = [], // output rows
+        N = text.length,
+        I = 0, // current character index
+        n = 0, // current line number
+        t, // current token
+        eof = N <= 0, // current token followed by EOF?
+        eol = false; // current token followed by EOL?
+
+    // Strip the trailing newline.
+    if (text.charCodeAt(N - 1) === NEWLINE) --N;
+    if (text.charCodeAt(N - 1) === RETURN) --N;
+
+    function token() {
+      if (eof) return EOF;
+      if (eol) return eol = false, EOL;
+
+      // Unescape quotes.
+      var i, j = I, c;
+      if (text.charCodeAt(j) === QUOTE) {
+        while (I++ < N && text.charCodeAt(I) !== QUOTE || text.charCodeAt(++I) === QUOTE);
+        if ((i = I) >= N) eof = true;
+        else if ((c = text.charCodeAt(I++)) === NEWLINE) eol = true;
+        else if (c === RETURN) { eol = true; if (text.charCodeAt(I) === NEWLINE) ++I; }
+        return text.slice(j + 1, i - 1).replace(/""/g, "\"");
+      }
+
+      // Find next delimiter or newline.
+      while (I < N) {
+        if ((c = text.charCodeAt(i = I++)) === NEWLINE) eol = true;
+        else if (c === RETURN) { eol = true; if (text.charCodeAt(I) === NEWLINE) ++I; }
+        else if (c !== DELIMITER) continue;
+        return text.slice(j, i);
+      }
+
+      // Return last token before EOF.
+      return eof = true, text.slice(j, N);
+    }
+
+    while ((t = token()) !== EOF) {
+      var row = [];
+      while (t !== EOL && t !== EOF) row.push(t), t = token();
+      if (f && (row = f(row, n++)) == null) continue;
+      rows.push(row);
+    }
+
+    return rows;
+  }
+
+  function preformatBody(rows, columns) {
+    return rows.map(function(row) {
+      return columns.map(function(column) {
+        return formatValue(row[column]);
+      }).join(delimiter);
+    });
+  }
+
+  function format(rows, columns) {
+    if (columns == null) columns = inferColumns(rows);
+    return [columns.map(formatValue).join(delimiter)].concat(preformatBody(rows, columns)).join("\n");
+  }
+
+  function formatBody(rows, columns) {
+    if (columns == null) columns = inferColumns(rows);
+    return preformatBody(rows, columns).join("\n");
+  }
+
+  function formatRows(rows) {
+    return rows.map(formatRow).join("\n");
+  }
+
+  function formatRow(row) {
+    return row.map(formatValue).join(delimiter);
+  }
+
+  function formatValue(value) {
+    return value == null ? ""
+        : value instanceof Date ? formatDate(value)
+        : reFormat.test(value += "") ? "\"" + value.replace(/"/g, "\"\"") + "\""
+        : value;
+  }
+
+  return {
+    parse: parse,
+    parseRows: parseRows,
+    format: format,
+    formatBody: formatBody,
+    formatRows: formatRows,
+    formatRow: formatRow,
+    formatValue: formatValue
+  };
+}
+
+var csv = dsv(",");
+
+var csvParse = csv.parse;
+var csvParseRows = csv.parseRows;
+var csvFormat = csv.format;
+var csvFormatBody = csv.formatBody;
+var csvFormatRows = csv.formatRows;
+var csvFormatRow = csv.formatRow;
+var csvFormatValue = csv.formatValue;
+
+var tsv = dsv("\t");
+
+var tsvParse = tsv.parse;
+var tsvParseRows = tsv.parseRows;
+var tsvFormat = tsv.format;
+var tsvFormatBody = tsv.formatBody;
+var tsvFormatRows = tsv.formatRows;
+var tsvFormatRow = tsv.formatRow;
+var tsvFormatValue = tsv.formatValue;
+
+function autoType(object) {
+  for (var key in object) {
+    var value = object[key].trim(), number, m;
+    if (!value) value = null;
+    else if (value === "true") value = true;
+    else if (value === "false") value = false;
+    else if (value === "NaN") value = NaN;
+    else if (!isNaN(number = +value)) value = number;
+    else if (m = value.match(/^([-+]\d{2})?\d{4}(-\d{2}(-\d{2})?)?(T\d{2}:\d{2}(:\d{2}(\.\d{3})?)?(Z|[-+]\d{2}:\d{2})?)?$/)) {
+      if (fixtz && !!m[4] && !m[7]) value = value.replace(/-/g, "/").replace(/T/, " ");
+      value = new Date(value);
+    }
+    else continue;
+    object[key] = value;
+  }
+  return object;
+}
+
+// https://github.com/d3/d3-dsv/issues/45
+var fixtz = new Date("2019-01-01T00:00").getHours() || new Date("2019-07-01T00:00").getHours();
+
+exports.autoType = autoType;
+exports.csvFormat = csvFormat;
+exports.csvFormatBody = csvFormatBody;
+exports.csvFormatRow = csvFormatRow;
+exports.csvFormatRows = csvFormatRows;
+exports.csvFormatValue = csvFormatValue;
+exports.csvParse = csvParse;
+exports.csvParseRows = csvParseRows;
+exports.dsvFormat = dsv;
+exports.tsvFormat = tsvFormat;
+exports.tsvFormatBody = tsvFormatBody;
+exports.tsvFormatRow = tsvFormatRow;
+exports.tsvFormatRows = tsvFormatRows;
+exports.tsvFormatValue = tsvFormatValue;
+exports.tsvParse = tsvParse;
+exports.tsvParseRows = tsvParseRows;
+
+Object.defineProperty(exports, '__esModule', { value: true });
+
+}));
+
+
+/***/ }),
+
+/***/ 605:
+/***/ (function(module) {
+
+module.exports = require("http");
+
+/***/ }),
+
+/***/ 761:
+/***/ (function(module) {
+
+module.exports = require("zlib");
+
+/***/ }),
+
+/***/ 835:
+/***/ (function(module) {
+
+module.exports = require("url");
+
+/***/ }),
+
+/***/ 846:
+/***/ (function(module) {
+
+/*
+ * Copyright (C) 2020 HERE Europe B.V.
+ * Licensed under MIT, see full license in LICENSE
+ * SPDX-License-Identifier: MIT
+ */
+
+module.exports = function prepareScrapedData(d) {
+  const content = d.split("try { window.getAreaStat = ")[1].split("}catch(e){}")[0]
+  const parsed = JSON.parse(content)
+  return parsed.map(d => {
+    return {
+      country: "China",
+      provincestate: translateProvinceName(d.provinceName),
+      confirmed: d.confirmedCount,
+      recoveries: d.curedCount,
+      deaths: d.deadCount,
+      updated: new Date().getTime(),
+    }
+  })
+}
+
+function translateProvinceName(name) {
+  const names = {
+    '辽宁省': "Liaoning",
+    '湖北省': "Hubei",
+    '江苏省': "Jiangsu",
+    '河南省': "Henan",
+    '福建省': "Fujian",
+    '海南省': "Hainan",
+    '山西省': "Shanxi",
+    '重庆市': "Chongqing",
+    '河北省': "Hebei",
+    '香港': "Hong Kong",
+    '湖南省': "Hunan",
+    '浙江省': "Zhejiang",
+    '山东省': "Shandong",
+    '内蒙古自治区': "Inner Mongolia",
+    '宁夏回族自治区': "Ningxia",
+    '贵州省': "Guizhou",
+    '广东省': "Guangdong",
+    '云南省': "Yunnan",
+    '四川省': "Sichuan",
+    '陕西省': "Shaanxi",
+    '黑龙江省': "Heilongjiang",
+    '上海市': "Shanghai",
+    '天津市': "Tianjin",
+    '安徽省': "Anhui",
+    '新疆维吾尔自治区': "Xinjiang",
+    '北京市': "Beijing",
+    '甘肃省': "Gansu",
+    '广西壮族自治区': "Guangxi",
+    '江西省': "Jiangxi",
+    '吉林省': "Jilin",
+    '台湾': "Taiwan",
+    '澳门': "Macau",
+    '青海省': "Qinghai",
+    '西藏自治区': "Tibet",
+    '待明确地区': "",
+  }
+  return names[name] || "N/A"
+}
+
+
+/***/ }),
+
+/***/ 977:
 /***/ (function(module, exports, __webpack_require__) {
 
 "use strict";
@@ -260,7 +831,7 @@ FetchError.prototype.name = 'FetchError';
 
 let convert;
 try {
-	convert = __webpack_require__(528).convert;
+	convert = __webpack_require__(426).convert;
 } catch (e) {}
 
 const INTERNALS = Symbol('Body internals');
@@ -1742,674 +2313,6 @@ exports.Request = Request;
 exports.Response = Response;
 exports.FetchError = FetchError;
 
-
-/***/ }),
-
-/***/ 140:
-/***/ (function(module) {
-
-/*
- * Copyright (C) 2020 HERE Europe B.V.
- * Licensed under MIT, see full license in LICENSE
- * SPDX-License-Identifier: MIT
- */
-
-module.exports = function prepareScrapedData(d) {
-  const content = d.split("try { window.getAreaStat = ")[1].split("}catch(e){}")[0]
-  const parsed = JSON.parse(content)
-  return parsed.map(d => {
-    return {
-      country: "China",
-      provincestate: translateProvinceName(d.provinceName),
-      confirmed: d.confirmedCount,
-      recoveries: d.curedCount,
-      deaths: d.deadCount,
-      updated: new Date().getTime(),
-    }
-  })
-}
-
-function translateProvinceName(name) {
-  const names = {
-    '辽宁省': "Liaoning",
-    '湖北省': "Hubei",
-    '江苏省': "Jiangsu",
-    '河南省': "Henan",
-    '福建省': "Fujian",
-    '海南省': "Hainan",
-    '山西省': "Shanxi",
-    '重庆市': "Chongqing",
-    '河北省': "Hebei",
-    '香港': "Hong Kong",
-    '湖南省': "Hunan",
-    '浙江省': "Zhejiang",
-    '山东省': "Shandong",
-    '内蒙古自治区': "Inner Mongolia",
-    '宁夏回族自治区': "Ningxia",
-    '贵州省': "Guizhou",
-    '广东省': "Guangdong",
-    '云南省': "Yunnan",
-    '四川省': "Sichuan",
-    '陕西省': "Shaanxi",
-    '黑龙江省': "Heilongjiang",
-    '上海市': "Shanghai",
-    '天津市': "Tianjin",
-    '安徽省': "Anhui",
-    '新疆维吾尔自治区': "Xinjiang",
-    '北京市': "Beijing",
-    '甘肃省': "Gansu",
-    '广西壮族自治区': "Guangxi",
-    '江西省': "Jiangxi",
-    '吉林省': "Jilin",
-    '台湾': "Taiwan",
-    '澳门': "Macau",
-    '青海省': "Qinghai",
-    '西藏自治区': "Tibet",
-    '待明确地区': "",
-  }
-  return names[name] || "N/A"
-}
-
-
-/***/ }),
-
-/***/ 171:
-/***/ (function(__unusedmodule, exports, __webpack_require__) {
-
-/*
- * Copyright (C) 2020 HERE Europe B.V.
- * Licensed under MIT, see full license in LICENSE
- * SPDX-License-Identifier: MIT
- */
-
-
-const fetch = __webpack_require__(130)
-const dayjs = __webpack_require__(808)
-
-const parseCsv = __webpack_require__(627)
-const getSupplement = __webpack_require__(457)
-const mergeData = __webpack_require__(53)
-const prepareScrapedData = __webpack_require__(140)
-const deleteAllFeatures = __webpack_require__(474)
-const uploadToDataHub = __webpack_require__(410)
-const credentials = __webpack_require__(438)
-
-const { secret } = credentials
-
-exports.handler = (event, context, callback) => {
-  const apiKey = event.queryStringParameters.apiKey
-  if (apiKey !== secret) {
-    callback(null, {
-      statusCode: 403,
-      body: `You don't have access!`,
-    })
-    return
-  }
-
-  const sheets = ["Confirmed", "Recovered", "Deaths"]
-
-  const sheetQueries = sheets.map(sheetName => {
-    return fetch (`https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_19-covid-${sheetName}.csv`).then(d => d.text())
-  })
-
-  Promise.all([
-    ...sheetQueries,
-    fetch("https://ncov.dxy.cn/ncovh5/view/pneumonia").then(d => d.text()),
-  ]).then(values => {
-
-    const [confirmedRaw, recoveredRaw, deathRaw] = values.slice(0, 3).map(d => parseCsv(d))
-    const dxyData = prepareScrapedData(values[3])
-
-    const [dateHeadersRaw, otherHeaders] = confirmedRaw.columns.reduce((acc, cur, i) => {
-      if (!i) acc = [[],[]]
-      const d = dayjs(cur).format("M/D/YYYY h:mm a")
-      if (d === "Invalid Date") acc[1].push(cur)
-      else acc[0].push(cur)
-      return acc
-    }, [])
-
-    const dateHeaders = dateHeadersRaw.map(d => dayjs(d).format("M/D/YYYY h:mm a"))
-
-    const confirmed = confirmedRaw.map(d => {
-      return Object.keys(d).reduce((acc, cur) => {
-        const isOtherHeader = otherHeaders.includes(cur)
-        const asDate = dayjs(cur).format("M/D/YYYY h:mm a")
-        const isDate = asDate !== "Invalid Date"
-        if (isDate && dateHeaders.includes(asDate)) {
-          acc[asDate] = parseInt(d[cur])
-        } else if(isOtherHeader) {
-          acc[cur] = d[cur]
-        } else {
-          return acc
-        }
-        return acc
-      }, {})
-    })
-
-    const recovered = recoveredRaw.map(d => {
-      return Object.keys(d).reduce((acc, cur) => {
-        const isOtherHeader = otherHeaders.includes(cur)
-        const asDate = dayjs(cur).format("M/D/YYYY h:mm a")
-        const isDate = asDate !== "Invalid Date"
-        if (isDate && dateHeaders.includes(asDate)) {
-          acc[asDate] = parseInt(d[cur])
-        } else if(isOtherHeader) {
-          acc[cur] = d[cur]
-        } else {
-          return acc
-        }
-        return acc
-      }, {})
-    })
-
-    const death = deathRaw.map(d => {
-      return Object.keys(d).reduce((acc, cur) => {
-        const isOtherHeader = otherHeaders.includes(cur)
-        const asDate = dayjs(cur).format("M/D/YYYY h:mm a")
-        const isDate = asDate !== "Invalid Date"
-        if (isDate && dateHeaders.includes(asDate)) {
-          acc[asDate] = parseInt(d[cur])
-        } else if(isOtherHeader) {
-          acc[cur] = d[cur]
-        } else {
-          return acc
-        }
-        return acc
-      }, {})
-    })
-
-    const jhuData = confirmed.map(d => {
-      const supplementConfirmed = getSupplement("", d, null, dateHeaders)
-      const supplementRecovered = getSupplement("recoveries_", d, recovered, dateHeaders)
-      const supplementDeath = getSupplement("deaths_", d, death, dateHeaders)
-      return {
-        provincestate: d["Province/State"],
-        countryregion: d["Country/Region"],
-        // Fix column mismatch in the dataset
-        lat: d["first_recorded"],
-        long: d["lat"],
-        headers: dateHeaders.join(";;"),
-        ...supplementConfirmed,
-        ...supplementRecovered,
-        ...supplementDeath,
-      }
-    })
-
-    const mergedData = mergeData(dateHeaders, jhuData, dxyData)
-
-    const geojson = {
-      type: "FeatureCollection",
-      features: mergedData.map(properties => {
-
-        const keys = Object.keys(properties)
-        const newProps = keys.reduce((acc, cur) => {
-          acc[cur.toLowerCase()] = properties[cur]
-          return acc
-        }, {})
-
-        return {
-          type: "Feature",
-          geometry: {
-            type: "Point",
-            coordinates: [parseFloat(properties.long), parseFloat(properties.lat)],
-          },
-          properties: newProps,
-        }
-      }),
-    }
-
-    deleteAllFeatures()
-      .then(() => {
-        uploadToDataHub(geojson)
-          .then(() => {
-            callback(null, {
-              statusCode: 200,
-              body: JSON.stringify(geojson, null, 2),
-            })
-          })
-          .catch(error => {
-            callback(null, {
-              statusCode: 422,
-              body: String(error),
-            })
-          })
-      })
-
-  })
-
-}
-
-
-/***/ }),
-
-/***/ 211:
-/***/ (function(module) {
-
-module.exports = require("https");
-
-/***/ }),
-
-/***/ 402:
-/***/ (function(__unusedmodule, exports) {
-
-// https://d3js.org/d3-dsv/ v1.2.0 Copyright 2019 Mike Bostock
-(function (global, factory) {
- true ? factory(exports) :
-undefined;
-}(this, function (exports) { 'use strict';
-
-var EOL = {},
-    EOF = {},
-    QUOTE = 34,
-    NEWLINE = 10,
-    RETURN = 13;
-
-function objectConverter(columns) {
-  return new Function("d", "return {" + columns.map(function(name, i) {
-    return JSON.stringify(name) + ": d[" + i + "] || \"\"";
-  }).join(",") + "}");
-}
-
-function customConverter(columns, f) {
-  var object = objectConverter(columns);
-  return function(row, i) {
-    return f(object(row), i, columns);
-  };
-}
-
-// Compute unique columns in order of discovery.
-function inferColumns(rows) {
-  var columnSet = Object.create(null),
-      columns = [];
-
-  rows.forEach(function(row) {
-    for (var column in row) {
-      if (!(column in columnSet)) {
-        columns.push(columnSet[column] = column);
-      }
-    }
-  });
-
-  return columns;
-}
-
-function pad(value, width) {
-  var s = value + "", length = s.length;
-  return length < width ? new Array(width - length + 1).join(0) + s : s;
-}
-
-function formatYear(year) {
-  return year < 0 ? "-" + pad(-year, 6)
-    : year > 9999 ? "+" + pad(year, 6)
-    : pad(year, 4);
-}
-
-function formatDate(date) {
-  var hours = date.getUTCHours(),
-      minutes = date.getUTCMinutes(),
-      seconds = date.getUTCSeconds(),
-      milliseconds = date.getUTCMilliseconds();
-  return isNaN(date) ? "Invalid Date"
-      : formatYear(date.getUTCFullYear()) + "-" + pad(date.getUTCMonth() + 1, 2) + "-" + pad(date.getUTCDate(), 2)
-      + (milliseconds ? "T" + pad(hours, 2) + ":" + pad(minutes, 2) + ":" + pad(seconds, 2) + "." + pad(milliseconds, 3) + "Z"
-      : seconds ? "T" + pad(hours, 2) + ":" + pad(minutes, 2) + ":" + pad(seconds, 2) + "Z"
-      : minutes || hours ? "T" + pad(hours, 2) + ":" + pad(minutes, 2) + "Z"
-      : "");
-}
-
-function dsv(delimiter) {
-  var reFormat = new RegExp("[\"" + delimiter + "\n\r]"),
-      DELIMITER = delimiter.charCodeAt(0);
-
-  function parse(text, f) {
-    var convert, columns, rows = parseRows(text, function(row, i) {
-      if (convert) return convert(row, i - 1);
-      columns = row, convert = f ? customConverter(row, f) : objectConverter(row);
-    });
-    rows.columns = columns || [];
-    return rows;
-  }
-
-  function parseRows(text, f) {
-    var rows = [], // output rows
-        N = text.length,
-        I = 0, // current character index
-        n = 0, // current line number
-        t, // current token
-        eof = N <= 0, // current token followed by EOF?
-        eol = false; // current token followed by EOL?
-
-    // Strip the trailing newline.
-    if (text.charCodeAt(N - 1) === NEWLINE) --N;
-    if (text.charCodeAt(N - 1) === RETURN) --N;
-
-    function token() {
-      if (eof) return EOF;
-      if (eol) return eol = false, EOL;
-
-      // Unescape quotes.
-      var i, j = I, c;
-      if (text.charCodeAt(j) === QUOTE) {
-        while (I++ < N && text.charCodeAt(I) !== QUOTE || text.charCodeAt(++I) === QUOTE);
-        if ((i = I) >= N) eof = true;
-        else if ((c = text.charCodeAt(I++)) === NEWLINE) eol = true;
-        else if (c === RETURN) { eol = true; if (text.charCodeAt(I) === NEWLINE) ++I; }
-        return text.slice(j + 1, i - 1).replace(/""/g, "\"");
-      }
-
-      // Find next delimiter or newline.
-      while (I < N) {
-        if ((c = text.charCodeAt(i = I++)) === NEWLINE) eol = true;
-        else if (c === RETURN) { eol = true; if (text.charCodeAt(I) === NEWLINE) ++I; }
-        else if (c !== DELIMITER) continue;
-        return text.slice(j, i);
-      }
-
-      // Return last token before EOF.
-      return eof = true, text.slice(j, N);
-    }
-
-    while ((t = token()) !== EOF) {
-      var row = [];
-      while (t !== EOL && t !== EOF) row.push(t), t = token();
-      if (f && (row = f(row, n++)) == null) continue;
-      rows.push(row);
-    }
-
-    return rows;
-  }
-
-  function preformatBody(rows, columns) {
-    return rows.map(function(row) {
-      return columns.map(function(column) {
-        return formatValue(row[column]);
-      }).join(delimiter);
-    });
-  }
-
-  function format(rows, columns) {
-    if (columns == null) columns = inferColumns(rows);
-    return [columns.map(formatValue).join(delimiter)].concat(preformatBody(rows, columns)).join("\n");
-  }
-
-  function formatBody(rows, columns) {
-    if (columns == null) columns = inferColumns(rows);
-    return preformatBody(rows, columns).join("\n");
-  }
-
-  function formatRows(rows) {
-    return rows.map(formatRow).join("\n");
-  }
-
-  function formatRow(row) {
-    return row.map(formatValue).join(delimiter);
-  }
-
-  function formatValue(value) {
-    return value == null ? ""
-        : value instanceof Date ? formatDate(value)
-        : reFormat.test(value += "") ? "\"" + value.replace(/"/g, "\"\"") + "\""
-        : value;
-  }
-
-  return {
-    parse: parse,
-    parseRows: parseRows,
-    format: format,
-    formatBody: formatBody,
-    formatRows: formatRows,
-    formatRow: formatRow,
-    formatValue: formatValue
-  };
-}
-
-var csv = dsv(",");
-
-var csvParse = csv.parse;
-var csvParseRows = csv.parseRows;
-var csvFormat = csv.format;
-var csvFormatBody = csv.formatBody;
-var csvFormatRows = csv.formatRows;
-var csvFormatRow = csv.formatRow;
-var csvFormatValue = csv.formatValue;
-
-var tsv = dsv("\t");
-
-var tsvParse = tsv.parse;
-var tsvParseRows = tsv.parseRows;
-var tsvFormat = tsv.format;
-var tsvFormatBody = tsv.formatBody;
-var tsvFormatRows = tsv.formatRows;
-var tsvFormatRow = tsv.formatRow;
-var tsvFormatValue = tsv.formatValue;
-
-function autoType(object) {
-  for (var key in object) {
-    var value = object[key].trim(), number, m;
-    if (!value) value = null;
-    else if (value === "true") value = true;
-    else if (value === "false") value = false;
-    else if (value === "NaN") value = NaN;
-    else if (!isNaN(number = +value)) value = number;
-    else if (m = value.match(/^([-+]\d{2})?\d{4}(-\d{2}(-\d{2})?)?(T\d{2}:\d{2}(:\d{2}(\.\d{3})?)?(Z|[-+]\d{2}:\d{2})?)?$/)) {
-      if (fixtz && !!m[4] && !m[7]) value = value.replace(/-/g, "/").replace(/T/, " ");
-      value = new Date(value);
-    }
-    else continue;
-    object[key] = value;
-  }
-  return object;
-}
-
-// https://github.com/d3/d3-dsv/issues/45
-var fixtz = new Date("2019-01-01T00:00").getHours() || new Date("2019-07-01T00:00").getHours();
-
-exports.autoType = autoType;
-exports.csvFormat = csvFormat;
-exports.csvFormatBody = csvFormatBody;
-exports.csvFormatRow = csvFormatRow;
-exports.csvFormatRows = csvFormatRows;
-exports.csvFormatValue = csvFormatValue;
-exports.csvParse = csvParse;
-exports.csvParseRows = csvParseRows;
-exports.dsvFormat = dsv;
-exports.tsvFormat = tsvFormat;
-exports.tsvFormatBody = tsvFormatBody;
-exports.tsvFormatRow = tsvFormatRow;
-exports.tsvFormatRows = tsvFormatRows;
-exports.tsvFormatValue = tsvFormatValue;
-exports.tsvParse = tsvParse;
-exports.tsvParseRows = tsvParseRows;
-
-Object.defineProperty(exports, '__esModule', { value: true });
-
-}));
-
-
-/***/ }),
-
-/***/ 410:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-/*
- * Copyright (C) 2020 HERE Europe B.V.
- * Licensed under MIT, see full license in LICENSE
- * SPDX-License-Identifier: MIT
- */
-
-const fetch = __webpack_require__(130)
-const credentials = __webpack_require__(438)
-
-const baseUrl = `https://xyz.api.here.com/hub/spaces`
-const { spaceId, accessToken } = credentials
-
-function uploadToDataHub(reqBody) {
-  return fetch(`${baseUrl}/${spaceId}/features`, {
-    method: "put",
-    body: JSON.stringify(reqBody),
-    headers: {
-      "Authorization": `Bearer ${accessToken}`,
-      "Content-Type": "application/geo+json",
-    },
-  }).then(res => res.json())
-}
-
-module.exports = uploadToDataHub
-
-
-/***/ }),
-
-/***/ 413:
-/***/ (function(module) {
-
-module.exports = require("stream");
-
-/***/ }),
-
-/***/ 438:
-/***/ (function(module) {
-
-/*
- * Copyright (C) 2020 HERE Europe B.V.
- * Licensed under MIT, see full license in LICENSE
- * SPDX-License-Identifier: MIT
- */
-
-const spaceId = "INSERT_HERE_STUDIO_SPACE_ID"
-const accessToken = "INSERT_HERE_ACCESS_TOKEN"
-const secret = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-
-module.exports = {
-  spaceId,
-  accessToken,
-  secret,
-}
-
-
-/***/ }),
-
-/***/ 457:
-/***/ (function(module) {
-
-/*
- * Copyright (C) 2020 HERE Europe B.V.
- * Licensed under MIT, see full license in LICENSE
- * SPDX-License-Identifier: MIT
- */
-
-function getSupplement(prefix = "", referenceSheet, sheet, dateHeaders) {
-  const relevant = sheet
-    ? sheet.find(s => (s["Province/State"] === referenceSheet["Province/State"]) && (s["Country/Region"] === referenceSheet["Country/Region"]))
-    : referenceSheet
-  return dateHeaders.reduce((acc, cur) => {
-    if (!relevant[cur]) return acc
-    acc[prefix + cur] = parseInt(relevant[cur])
-    return acc
-  }, {})
-}
-
-module.exports = getSupplement
-
-
-/***/ }),
-
-/***/ 474:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-/*
- * Copyright (C) 2020 HERE Europe B.V.
- * Licensed under MIT, see full license in LICENSE
- * SPDX-License-Identifier: MIT
- */
-
-const fetch = __webpack_require__(130)
-const credentials = __webpack_require__(438)
-
-const baseUrl = `https://xyz.api.here.com/hub/spaces`
-const { spaceId, accessToken } = credentials
-
-function deleteAllFeatures() {
-  return fetch(`${baseUrl}/${spaceId}/features?tags=*`, {
-    method: "delete",
-    headers: {
-      "Authorization": `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  })
-}
-
-module.exports = deleteAllFeatures
-
-
-/***/ }),
-
-/***/ 528:
-/***/ (function() {
-
-eval("require")("encoding");
-
-
-/***/ }),
-
-/***/ 605:
-/***/ (function(module) {
-
-module.exports = require("http");
-
-/***/ }),
-
-/***/ 627:
-/***/ (function(module, __unusedexports, __webpack_require__) {
-
-/*
- * Copyright (C) 2020 HERE Europe B.V.
- * Licensed under MIT, see full license in LICENSE
- * SPDX-License-Identifier: MIT
- */
-
-const dsv = __webpack_require__(402)
-
-function parseCsv(data) {
-  const substitutes = {
-    "2": "\"first_recorded\"",
-    "3": "\"lat\"",
-    "4": "\"long\"",
-  }
-
-  const rows = data.split("\n")
-  const headers = rows[0].split(",").map((d, i) => {
-    return substitutes[i] ? substitutes[i] : d
-  }).join(",")
-  const raw = headers + "\n" + rows.slice(1).join("\n")
-  const parsed = dsv.csvParse(raw)
-
-  return parsed
-}
-
-module.exports = parseCsv
-
-
-/***/ }),
-
-/***/ 761:
-/***/ (function(module) {
-
-module.exports = require("zlib");
-
-/***/ }),
-
-/***/ 808:
-/***/ (function(module) {
-
-!function(t,n){ true?module.exports=n():undefined}(this,function(){"use strict";var t="millisecond",n="second",e="minute",r="hour",i="day",s="week",u="month",o="quarter",a="year",h=/^(\d{4})-?(\d{1,2})-?(\d{0,2})[^0-9]*(\d{1,2})?:?(\d{1,2})?:?(\d{1,2})?.?(\d{1,3})?$/,f=/\[([^\]]+)]|Y{2,4}|M{1,4}|D{1,2}|d{1,4}|H{1,2}|h{1,2}|a|A|m{1,2}|s{1,2}|Z{1,2}|SSS/g,c=function(t,n,e){var r=String(t);return!r||r.length>=n?t:""+Array(n+1-r.length).join(e)+t},d={s:c,z:function(t){var n=-t.utcOffset(),e=Math.abs(n),r=Math.floor(e/60),i=e%60;return(n<=0?"+":"-")+c(r,2,"0")+":"+c(i,2,"0")},m:function(t,n){var e=12*(n.year()-t.year())+(n.month()-t.month()),r=t.clone().add(e,u),i=n-r<0,s=t.clone().add(e+(i?-1:1),u);return Number(-(e+(n-r)/(i?r-s:s-r))||0)},a:function(t){return t<0?Math.ceil(t)||0:Math.floor(t)},p:function(h){return{M:u,y:a,w:s,d:i,D:"date",h:r,m:e,s:n,ms:t,Q:o}[h]||String(h||"").toLowerCase().replace(/s$/,"")},u:function(t){return void 0===t}},$={name:"en",weekdays:"Sunday_Monday_Tuesday_Wednesday_Thursday_Friday_Saturday".split("_"),months:"January_February_March_April_May_June_July_August_September_October_November_December".split("_")},l="en",m={};m[l]=$;var y=function(t){return t instanceof v},M=function(t,n,e){var r;if(!t)return l;if("string"==typeof t)m[t]&&(r=t),n&&(m[t]=n,r=t);else{var i=t.name;m[i]=t,r=i}return!e&&r&&(l=r),r||!e&&l},g=function(t,n,e){if(y(t))return t.clone();var r=n?"string"==typeof n?{format:n,pl:e}:n:{};return r.date=t,new v(r)},D=d;D.l=M,D.i=y,D.w=function(t,n){return g(t,{locale:n.$L,utc:n.$u,$offset:n.$offset})};var v=function(){function c(t){this.$L=this.$L||M(t.locale,null,!0),this.parse(t)}var d=c.prototype;return d.parse=function(t){this.$d=function(t){var n=t.date,e=t.utc;if(null===n)return new Date(NaN);if(D.u(n))return new Date;if(n instanceof Date)return new Date(n);if("string"==typeof n&&!/Z$/i.test(n)){var r=n.match(h);if(r)return e?new Date(Date.UTC(r[1],r[2]-1,r[3]||1,r[4]||0,r[5]||0,r[6]||0,r[7]||0)):new Date(r[1],r[2]-1,r[3]||1,r[4]||0,r[5]||0,r[6]||0,r[7]||0)}return new Date(n)}(t),this.init()},d.init=function(){var t=this.$d;this.$y=t.getFullYear(),this.$M=t.getMonth(),this.$D=t.getDate(),this.$W=t.getDay(),this.$H=t.getHours(),this.$m=t.getMinutes(),this.$s=t.getSeconds(),this.$ms=t.getMilliseconds()},d.$utils=function(){return D},d.isValid=function(){return!("Invalid Date"===this.$d.toString())},d.isSame=function(t,n){var e=g(t);return this.startOf(n)<=e&&e<=this.endOf(n)},d.isAfter=function(t,n){return g(t)<this.startOf(n)},d.isBefore=function(t,n){return this.endOf(n)<g(t)},d.$g=function(t,n,e){return D.u(t)?this[n]:this.set(e,t)},d.year=function(t){return this.$g(t,"$y",a)},d.month=function(t){return this.$g(t,"$M",u)},d.day=function(t){return this.$g(t,"$W",i)},d.date=function(t){return this.$g(t,"$D","date")},d.hour=function(t){return this.$g(t,"$H",r)},d.minute=function(t){return this.$g(t,"$m",e)},d.second=function(t){return this.$g(t,"$s",n)},d.millisecond=function(n){return this.$g(n,"$ms",t)},d.unix=function(){return Math.floor(this.valueOf()/1e3)},d.valueOf=function(){return this.$d.getTime()},d.startOf=function(t,o){var h=this,f=!!D.u(o)||o,c=D.p(t),d=function(t,n){var e=D.w(h.$u?Date.UTC(h.$y,n,t):new Date(h.$y,n,t),h);return f?e:e.endOf(i)},$=function(t,n){return D.w(h.toDate()[t].apply(h.toDate(),(f?[0,0,0,0]:[23,59,59,999]).slice(n)),h)},l=this.$W,m=this.$M,y=this.$D,M="set"+(this.$u?"UTC":"");switch(c){case a:return f?d(1,0):d(31,11);case u:return f?d(1,m):d(0,m+1);case s:var g=this.$locale().weekStart||0,v=(l<g?l+7:l)-g;return d(f?y-v:y+(6-v),m);case i:case"date":return $(M+"Hours",0);case r:return $(M+"Minutes",1);case e:return $(M+"Seconds",2);case n:return $(M+"Milliseconds",3);default:return this.clone()}},d.endOf=function(t){return this.startOf(t,!1)},d.$set=function(s,o){var h,f=D.p(s),c="set"+(this.$u?"UTC":""),d=(h={},h[i]=c+"Date",h.date=c+"Date",h[u]=c+"Month",h[a]=c+"FullYear",h[r]=c+"Hours",h[e]=c+"Minutes",h[n]=c+"Seconds",h[t]=c+"Milliseconds",h)[f],$=f===i?this.$D+(o-this.$W):o;if(f===u||f===a){var l=this.clone().set("date",1);l.$d[d]($),l.init(),this.$d=l.set("date",Math.min(this.$D,l.daysInMonth())).toDate()}else d&&this.$d[d]($);return this.init(),this},d.set=function(t,n){return this.clone().$set(t,n)},d.get=function(t){return this[D.p(t)]()},d.add=function(t,o){var h,f=this;t=Number(t);var c=D.p(o),d=function(n){var e=g(f);return D.w(e.date(e.date()+Math.round(n*t)),f)};if(c===u)return this.set(u,this.$M+t);if(c===a)return this.set(a,this.$y+t);if(c===i)return d(1);if(c===s)return d(7);var $=(h={},h[e]=6e4,h[r]=36e5,h[n]=1e3,h)[c]||1,l=this.$d.getTime()+t*$;return D.w(l,this)},d.subtract=function(t,n){return this.add(-1*t,n)},d.format=function(t){var n=this;if(!this.isValid())return"Invalid Date";var e=t||"YYYY-MM-DDTHH:mm:ssZ",r=D.z(this),i=this.$locale(),s=this.$H,u=this.$m,o=this.$M,a=i.weekdays,h=i.months,c=function(t,r,i,s){return t&&(t[r]||t(n,e))||i[r].substr(0,s)},d=function(t){return D.s(s%12||12,t,"0")},$=i.meridiem||function(t,n,e){var r=t<12?"AM":"PM";return e?r.toLowerCase():r},l={YY:String(this.$y).slice(-2),YYYY:this.$y,M:o+1,MM:D.s(o+1,2,"0"),MMM:c(i.monthsShort,o,h,3),MMMM:h[o]||h(this,e),D:this.$D,DD:D.s(this.$D,2,"0"),d:String(this.$W),dd:c(i.weekdaysMin,this.$W,a,2),ddd:c(i.weekdaysShort,this.$W,a,3),dddd:a[this.$W],H:String(s),HH:D.s(s,2,"0"),h:d(1),hh:d(2),a:$(s,u,!0),A:$(s,u,!1),m:String(u),mm:D.s(u,2,"0"),s:String(this.$s),ss:D.s(this.$s,2,"0"),SSS:D.s(this.$ms,3,"0"),Z:r};return e.replace(f,function(t,n){return n||l[t]||r.replace(":","")})},d.utcOffset=function(){return 15*-Math.round(this.$d.getTimezoneOffset()/15)},d.diff=function(t,h,f){var c,d=D.p(h),$=g(t),l=6e4*($.utcOffset()-this.utcOffset()),m=this-$,y=D.m(this,$);return y=(c={},c[a]=y/12,c[u]=y,c[o]=y/3,c[s]=(m-l)/6048e5,c[i]=(m-l)/864e5,c[r]=m/36e5,c[e]=m/6e4,c[n]=m/1e3,c)[d]||m,f?y:D.a(y)},d.daysInMonth=function(){return this.endOf(u).$D},d.$locale=function(){return m[this.$L]},d.locale=function(t,n){if(!t)return this.$L;var e=this.clone(),r=M(t,n,!0);return r&&(e.$L=r),e},d.clone=function(){return D.w(this.$d,this)},d.toDate=function(){return new Date(this.valueOf())},d.toJSON=function(){return this.isValid()?this.toISOString():null},d.toISOString=function(){return this.$d.toISOString()},d.toString=function(){return this.$d.toUTCString()},c}();return g.prototype=v.prototype,g.extend=function(t,n){return t(n,v,g),g},g.locale=M,g.isDayjs=y,g.unix=function(t){return g(1e3*t)},g.en=m[l],g.Ls=m,g});
-
-
-/***/ }),
-
-/***/ 835:
-/***/ (function(module) {
-
-module.exports = require("url");
 
 /***/ })
 
