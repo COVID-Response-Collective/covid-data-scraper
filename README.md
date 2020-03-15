@@ -1,29 +1,54 @@
-# HERE-COVID-2019
+# Covid Scraper
 
-*Update: March 17, 2020 - The production version of this map has been updated and refined to listing countries only. We will publish the updated GitHub repo as soon as possible.*
+The "covid-scraper" (aka COVID Virus Scraper) is a serverless function to scrape the [Johns Hopkins University](https://github.com/CSSEGISandData/COVID-19) spreadsheet containing global time-series data on the COVID-19 (Corona Virus) outbreak, and the [DXY API](https://ncov.dxy.cn/ncovh5/view/pneumonia) containing the latest data from China. See links below for more information about the data feeds.
 
-This repository is the code used to power the [HERE-hosted COVID-19](https://developer.here.com/coronavirus/) map. HERE is releasing this code to the community so that any developer may iterate, improve or even recommend features/functionality through Pull Requests.
+## Getting Started
 
-Please note that with the ever-evolving situation of the COVID-19 virus, parts of this map may break from time to time and we will do our best to keep up with the changes.
+To use the following serverless function you will need an account with [Netlify](https://www.netlify.com) to host the function. 
 
-Please fork at will and let us know what you come up with. You can reach out to us on our Slack channel #covid-19-map. We hope that you find this reference useful.
+To deploy the function on Netlify, make sure to install `ncc` and then compile `src` into a `functions` directory.
 
-This repository is organized into two separate sections. There is the "covid-map" which is a [Gatsby-based](https://www.gatsbyjs.org) visualization of the data that is collected with the "covid-scraper" utility. The "covid-scraper" is a serverless function that is hosted over at [Netlify](https://www.netlify.com). This function then updates a "HERE Data Hub" space (think of it like a database for Geo-spatial data). When the map loads, it reads from the HERE Data Hub space and presents the latest snapshot of information.
+```
+npm i -g @zeit/ncc
+```
 
-Requirements to get started.
-- An account with [Netlify](https://www.netlify.com) to host the serverless function
-- An account with [HERE Developer Portal](https://developer.here.com/?cid=Freemium-DeveloperPortalTutorial-PJ-0-Javascript-DevPortal-&utm_source=DeveloperPortalTutorial&utm_medium=referral&utm_campaign=Webinar_IOT_2020_Golden-Age-Location-Enabled-AI-Jan-16)
-- 2 HERE Data Hub Spaces to host the data
+and then...
 
-How to get in touch
-- [Join our Slack Channel](http://t.her.is/slack) #covid-19-map
-- [Follow us on Twitter](https://twitter.com/heredev)
-- [Join our Twitch Streams](https://www.twitch.tv/heredev)
-- [Subscribe on YouTube](https://www.youtube.com/user/heremaps/playlists?view=50&sort=dd&shelf_id=10)
+```
+ncc build src/download.js -o functions
+```
 
+You can `build` the function to any other directory by changing the `-o` option.
+
+## Local Development
+
+You don't need to deploy the function to update the data in the Here Data Hub.
+
+If you want to work on or run the function locally, you can install `netlify-cli` and run the function locally via `netlify dev`. Check out [netlify-dev](https://www.netlify.com/products/dev/) for more information.
+
+To update the data locally, run `netlify dev` and then navigate to (use the api key you specified as a `secret` in `./utils/credentials.js`):
+
+```
+localhost:8888/.netlify/functions/index?apiKey=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+## Updating the Data
+
+To update the data, you send a request to the serverless function. For some security, you can use the secret to prevent random updates:
+
+```
+https://my-scraper-app.netlify.com/.netlify/functions/index?apiKey=XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+```
+
+You can easily automate this update process using e.g. GitHub actions.
+
+## Sources
+
+The data is being scraped from [JHU](https://github.com/CSSEGISandData/COVID-19) and [DXY](https://ncov.dxy.cn/ncovh5/view/pneumonia)
 
 # License
 
+
 Copyright (C) 2020 HERE Europe B.V.
 
-Unless otherwise noted in `LICENSE` files for specific files or directories, the [LICENSE](LICENSE) in the root applies to all content in this repository.
+See the [LICENSE](./LICENSE) file in the root of this project for license details.
