@@ -1,8 +1,5 @@
-.netlify
 .DS_Store
 node_modules
-
-public
 
 .env.development
 .env

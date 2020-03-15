@@ -1,17 +1,23 @@
 {
-  "name": "@here/covid-scraper",
-  "version": "1.0.0",
+  "name": "covid-data-scraper",
+  "version": "0.0.1",
   "author": {
-    "name": "HERE Europe B.V.",
-    "url": "https://here.com"
+    "name": "Meredith Mello",
+    "url": "https://covidresponse.dev"
   },
-  "main": "index.js",
   "license": "MIT",
+  "scripts": {
+    "start": "node ./bin/www"
+  },
   "dependencies": {
+    "body-parser": "^1.19.0",
     "d3-dsv": "^1.2.0",
     "dayjs": "^1.8.20",
+    "debug": "^4.1.1",
+    "express": "^4.17.1",
     "googleapis": "39",
     "lodash": "^4.17.15",
+    "morgan": "^1.9.1",
     "node-fetch": "^2.6.0"
   },
   "keywords": [
@@ -27,5 +33,10 @@
   "bugs": {
     "url": "https://github.com/heremaps/here-covid-19-tracker/issues"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "eslint": "^6.8.0",
+    "eslint-config-airbnb-base": "^14.1.0",
+    "eslint-plugin-import": "^2.20.1"
+  }
 }
