@@ -17,8 +17,6 @@ function mergeData(dateHeaders, jhuData, dxyDate) {
     const listAsChina = point.countryregion === 'Mainland China' || point.countryregion === 'Macau' || point.countryregion === 'Hong Kong' || point.countryregion === 'Taiwan';
     const relevantData = dxyDate.find((s) => s.provincestate === point.provincestate);
 
-    console.log(point);
-
     const timeNow = dayjs().subtract(dayjs().utcOffset(), 'minute').format('h:mm a');
 
     const relevantDate = isSameDay ? latestJHUDateFull : `${latestDxyDate} ${timeNow}`;
