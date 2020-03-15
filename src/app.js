@@ -13,6 +13,6 @@ app.use(express.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.use('/download', downloadRouter);
+app.use('/', downloadRouter);
 
 module.exports = app;
