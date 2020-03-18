@@ -4,15 +4,15 @@
  * SPDX-License-Identifier: MIT
  */
 
-function getSupplement(prefix = '', referenceSheet, sheet, dateHeaders) {
+function getSupplement(referenceSheet, sheet, dateHeaders) {
   const relevant = sheet
     ? sheet.find((s) => (s['Province/State'] === referenceSheet['Province/State']) && (s['Country/Region'] === referenceSheet['Country/Region']))
     : referenceSheet;
-  return dateHeaders.reduce((acc, cur) => {
-    if (!relevant[cur]) return acc;
-    acc[prefix + cur] = parseInt(relevant[cur], 10);
-    return acc;
-  }, {});
+
+  return dateHeaders.reduce((acc, cur) => (!relevant[cur] ? acc : {
+    ...acc,
+    [cur]: parseInt(relevant[cur], 10),
+  }), {});
 }
 
 module.exports = getSupplement;

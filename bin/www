@@ -5,8 +5,22 @@
  */
 
 const http = require('http');
+const fs = require('fs');
 const debug = require('debug')('contraction-server:server');
+const schedule = require('node-schedule');
 const app = require('../src/app');
+const download = require('../src/utils/download');
+
+async function retrieveData() {
+  console.log('Retrieving data at', new Date());
+  const data = await download();
+  fs.writeFileSync('./cachedData.json', JSON.stringify(data, null, 2));
+  console.log('Data retrieved!');
+}
+
+schedule.scheduleJob('*/5 * * * *', async () => {
+  await retrieveData();
+});
 
 /**
  * Normalize a port into a number, string, or false.
@@ -80,6 +94,8 @@ function onListening() {
     : `port ${addr.port}`;
   debug(`Listening on ${bind}`);
 }
+
+retrieveData();
 
 /**
  * Listen on provided port, on all network interfaces.

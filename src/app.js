@@ -3,7 +3,7 @@ const path = require('path');
 const bodyParser = require('body-parser');
 const logger = require('morgan');
 
-const downloadRouter = require('./routes/download');
+const router = require('./routes/index');
 
 const app = express();
 
@@ -13,6 +13,6 @@ app.use(express.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.use('/', downloadRouter);
+app.use('/', router);
 
 module.exports = app;
